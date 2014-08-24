@@ -1,0 +1,1188 @@
+%% ----------------------------------------------------------------
+%% AppendixA.tex
+%% ---------------------------------------------------------------- 
+\chapter{Appendix A: Källkod SiteOpt} \label{Chapter:kallkod}
+
+\newminted{python}{fontsize=\tiny}
+
+\begin{pythoncode}
+# http://github.com/maxberggren/SiteOpt
+
+#!/usr/bin/env python
+# encoding: utf-8
+# python v 2.7
+"""
+siteOpt.py
+
+Created by Max Berggren 2014-05-10
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+"""
+
+from __future__ import division
+import numpy as np
+from scipy import interpolate
+import subprocess as sp
+from StringIO import StringIO
+from math import pi, atan, acos, cos, sin, tan, exp, sqrt, radians, degrees
+import os
+
+xfoilPath = os.getcwd() + os.path.sep + "Xfoil.app/Contents/Resources/xfoil"
+
+
+def BlendAirfoils(AF1, AF2, percentAF2):
+    delX = AF2.x - AF1.x
+    newx = AF1.x + delX*percentAF2
+    delY = AF2.y - AF1.y
+    newy = AF1.y + delY*percentAF2
+    return newx, newy
+
+def AoAsteps(start, stop, step):
+    AoAs = []
+    AoA = start
+    if start <= stop:
+        while AoA <= stop:
+            AoAs.append(AoA)
+            AoA += step
+    else:
+        while AoA >= stop:
+            AoAs.append(AoA)
+            AoA -= step
+    return AoAs
+
+class Alarm(Exception):
+    pass
+
+def alarm_handler(signum, frame):
+    raise Alarm
+
+
+def individualNr():
+    counter = 0  
+    while True:
+        counter = counter + 1
+        yield counter
+
+def readTUR(fileName):
+    with open(fileName) as f:
+        content = f.readlines()
+        content = "   ".join(content)
+        content = content.replace("\n", "")
+        content = content.replace("[", " ")
+        
+        content = content.replace("]", " ")
+        content = content.replace("     ", " ")
+        content = content.replace("    ", " ")
+        content = content.replace("   ", " ")
+        content = content.replace("  ", " ")
+        content = content.split(" ")
+        
+        content = [x for x in content if x]
+        content = [float(x) for x in content]
+        content = np.array(content)
+       
+        
+        return content
+
+
+class Turbine:
+    def __init__(self, listOfAFs, R, hubRadius, TSR, ratedPower, B, visc, rho, tol, windSpeeds, 
+                 windFrq, cutIn=5, cutOut=15, noBetween=2, noInterpolatedAFs=1, 
+                 skipBlending=1, metaData=None, indNr=None, RPM=None,
+                 chord=[0.4572,  0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572], 
+                 twist=[44, 44, 36, 24, 20, 16, 13, 10, 9, 4, 2, 1, 0], pitch=0,
+                 chordData=None, twistData=None,
+                 evalWindSpeeds=None):
+
+        self.radialPositions = len(listOfAFs) + (len(listOfAFs)-1)*noBetween + ((len(listOfAFs)-1)*noBetween-1+len(listOfAFs))*noInterpolatedAFs
+
+        self.AFs = [None] * self.radialPositions # initiate list of AFs
+        self.R = R
+        self.hubRadius = hubRadius # radius where the blade begins and hub ends (m)
+        self.TSR = TSR # tip speed ratio (a.k.a. the symbol lambda)
+        self.RPM = RPM
+        self.B = B # number of blades
+        self.visc = visc # kinematic viscosity of air 
+        self.rho = rho # density of air 
+        self.tol = tol # convergence tolerance for a and aprime
+        self.cutIn = cutIn
+        self.cutOut = cutOut
+        self.windSpeeds = windSpeeds
+        self.windFrq = windFrq
+        self.ratedPower = ratedPower
+        self.chord = chord
+        self.twist = twist
+        self.pitch = pitch
+        self.r = []
+
+        if evalWindSpeeds == None:
+            self.evalWindSpeeds = np.linspace(cutIn, cutOut, 10)
+        else:
+            self.evalWindSpeeds = evalWindSpeeds
+
+        if chordData:
+            self.chord = self.interpolChordTwist(chordData)
+        if twistData:
+            self.twist = self.interpolChordTwist(twistData)
+        if indNr:
+            self.writeMetaData(metaData, indNr)
+
+        j = 0
+        for i in range(len(listOfAFs)): # portion out the main AFs
+            self.AFs[int(i*((self.radialPositions-1)/(len(listOfAFs)-1)))] = listOfAFs[j]
+            j = j+1
+
+
+        for i in range(len(listOfAFs)-1): # find the places of the blended AFs
+            startIndex = int(i*((self.radialPositions-1)/(len(listOfAFs)-1)))
+            nextMainAF = int((i+1)*((self.radialPositions-1)/(len(listOfAFs)-1)))
+            betweenStep = int((self.radialPositions/len(listOfAFs))/(noBetween))
+            h = 1
+            for b in range(noBetween+1):
+                
+                if not b == 0:
+                    if not skipBlending:
+                        xb, yb = BlendAirfoils(listOfAFs[i], listOfAFs[i+1], percentAF2=h*0.3333333)
+                        AFb = Airfoil(xb, yb, blendInput=1)
+                        self.AFs[int(startIndex + b*betweenStep)] = AFb
+                    else:
+                        self.AFs[int(startIndex + b*betweenStep)] = Airfoil(interpolatedInput=1,
+                                                                            AF1=listOfAFs[i], 
+                                                                            AF2=listOfAFs[i+1])
+
+        for i in range(len(listOfAFs)-1): # find the places of the intepolated AFs,
+            startIndex = int(i*((self.radialPositions-1)/(len(listOfAFs)-1)))
+            betweenStep = int((self.radialPositions/len(listOfAFs))/(noBetween))
+            for b in range(noBetween+1):
+                for k in range(noInterpolatedAFs):
+                    #print "interp ",startIndex + b*betweenStep + k +1
+                    interIndex = int(startIndex + b*betweenStep + k +1)
+                    self.AFs[interIndex] = Airfoil(interpolatedInput=1, AF1=self.AFs[interIndex-1], AF2=self.AFs[interIndex+1])
+
+
+        self.checkPerformance() # run simulation
+
+    def interpolChordTwist(self, data):
+        tck = interpolate.splrep([0, data[1], 1], [data[0], data[2], data[3]],s=0,k=2)
+        xnew = np.linspace(0, 1, self.radialPositions)
+        ynew = interpolate.splev(xnew,tck,der=0)        
+        return ynew
+    
+    def writeMetaData(self, metaData, indNr):
+        with open("TurbineNo"+str(indNr)+".tur", "w+") as f:
+            f.write(str(metaData) + '\n') 
+
+    def avgPower(self):
+        if self.power:
+            avgPower = 0
+
+            for i, speed in enumerate(self.windSpeeds):
+                if speed > self.cutIn and speed < self.cutOut:
+                    avgPower += self.windFrq[i]*self.powerInterpolate(speed)
+            return avgPower
+
+    def powerInterpolate(self, windSpeed):
+        try:
+            if windSpeed < self.cutIn:
+                return 0
+            if windSpeed > self.cutOut:
+                return 0
+            
+            if len(self.evalWindSpeeds) == 1:
+                return self.power[0]  
+
+            f = interpolate.interp1d(self.evalWindSpeeds, self.power, kind='cubic')
+            if f(windSpeed) < self.ratedPower:
+                return f(windSpeed)
+            else:
+                return self.ratedPower
+        except:
+            print "Problems with power curve"
+            return 0
+
+    def checkPerformance(self):
+        R = self.R # radius (m)
+        hubRadius = self.hubRadius # radius where the blade begins and hub ends (m)
+        TSR = self.TSR # tip speed ratio (a.k.a. the symbol lambda)
+        B = self.B # number of blades
+        visc = self.visc # kinematic viscosity of air 
+        rho = self.rho # density of air 
+        tol = self.tol # convergence tolerance for a and aprime
+        cutIn = self.cutIn
+        cutOut = self.cutOut
+        RPM = self.RPM
+        pitch = self.pitch
+
+        r = np.linspace(hubRadius/R, 1, num=self.radialPositions)*R # radius of blade elements betweeb hub and tip (m)
+        self.r = r
+        dr = r[1]-r[0] # width of blade elements
+
+        rNorm = r/R # normalized radial elements (r/R)
+
+        twist = np.array(self.twist) + pitch # twist distribution accounted for pitch
+        chord = np.array(self.chord) # chord distribution
+
+        T = 0.0
+        Q = 0.0
+        Cp = 0
+
+        powers = []
+        Qs = []
+        angSpeeds = []
+        Cps = []
+
+        
+
+        for Uinf in self.evalWindSpeeds:
+            
+            angSpeed = TSR*Uinf/R # radians/s
+            if RPM: # if constant RPM is to be used
+                angSpeed = RPM*0.1047 # radians/s
+                TSR = angSpeed*R/Uinf
+
+            angSpeeds.append(angSpeed*(9.5493)) # rpm
+            T = 0
+            Q = 0
+
+            print "Uinf    Element Radius  Iter    a       aprime  AoA     Utot    locTSR  phi     Cl      Cd      F       sigma   Re*10^5 AngSpd  phi(deg)  dQ    Cn      Ct"
+            for i in range(len(r)-1): 
+
+                a = 0
+                aprime = 0
+                dQ = 0
+                dT = 0
+                
+                TSRr = TSR*rNorm[i] # local TSR at the blade element (a.k.a. lambda_r)
+                sigmaprime = B*chord[i]/(2*pi*r[i]) # local solidity
+
+
+                #a = (1/4)*(2 + pi*TSRr*sigmaprime - sqrt(4 - 4*pi*TSRr*sigmaprime + pi*sigmaprime**2*(8*twist[i] + pi*sigmaprime)))
+
+
+                for j in range(200): # max 200 iterations
+                
+                    if not aprime == -1:
+                        phi = atan( (1 - a)/( (1 + aprime)*TSRr ) )
+               
+                    else: # prevent divide by zero
+                        phi = atan( (1 - a)/( (1 + aprime*1.01)*TSRr ) )
+
+                    AoA = phi*(180.0/pi) - twist[i] # degrees
+                    Utot = sqrt(  (Uinf*(1 - a))**2 + ( angSpeed*r[i]*(1 + aprime) )**2  )
+                    Re = Utot*chord[i]/visc
+                    Cl = self.AFs[i].Cl(AoA, Re/100000)
+                    Cd = self.AFs[i].Cd(AoA, Re/100000)
+
+
+                    Cn = Cl*cos(phi) + Cd*sin(phi)
+                    Ct = Cl*sin(phi) - Cd*cos(phi)
+
+                    
+                    C_T = sigmaprime*(1 - a)**2*Cn/(sin(phi)**2)
+
+                    try:
+                        Ftip = (2/pi)*acos(exp(-(B*(R-r[i]))/(2*r[i]*sin(phi))))
+                        Rhub = r[0]
+                        Fhub = (2/pi)*acos(exp(-(B*(r[i]-Rhub))/(2*r[i]*sin(phi))))
+                        F = Fhub*Ftip
+                    except: # First element often fails
+                        F = 0.5
+                    
+                    np.seterr(all='raise') 
+                    
+                    if C_T > 0.96*F: # Glauert correction
+                        newa = (18*F - 20 - 3*sqrt(C_T*(50-36*F) + 12*F*(3*F - 4))) / (36*F - 50)
+                    else: # Standard BEM therory
+                        try:
+                            newa = 1 / ( 1 + (4*F*sin(phi)**2)/(sigmaprime*Cn) )
+                        except: # prevent divide by zero
+                            print "error när a räknas ut"
+                            dQ = 0
+                            dT = 0
+                            newa = 0
+                            break
+                    try:
+                        aprime = 1 / (-1 + (4*F*sin(phi)*cos(phi)) / (sigmaprime*Ct))
+                    except: # prevent divide by zero
+                        dQ = 0
+                        dT = 0
+                        aprime = 0
+                        break
+
+
+                    diffa = abs(a - newa)
+                    damper = 0.5
+                    a = damper*newa + (1 - damper)*a
+
+                    if diffa < tol and j > 3:
+                        break
+                
+                #dQ = 4*pi*(r[i]**3)*rho*Uinf*angSpeed*(1 - a)*aprime*dr
+                #dQ = 0.5*rho*B*Uinf**2*(1-a)*angSpeed*r[i]*(1+aprime)*chord[i]*(Cl*sin(phi) - Cd*cos(phi)*r[i]*dr/(sin(phi)*cos(phi))
+                #dQ = B*0.5*rho*(Utot**2)*Ct*chord[i]*r[i]*dr
+                #dQ = 4*aprime*(1 - a)*rho*Uinf*angSpeed*r[i]**3*pi*dr
+
+                dQ = 0.5*rho*B*Uinf*(1-a)*angSpeed*r[i]*(1+aprime)*chord[i]*Ct*r[i]*dr/(sin(phi)*cos(phi)) # calc additional Q
+                
+                if j == 199: # convergence fail
+                    dQ = 0
+                    dT = 0
+
+                if AoA < -20 or AoA > 90: # if crazy AoA
+                    dQ = 0
+                    dT = 0
+
+                Q = Q + dQ # total torQue
+
+                print str(int(Uinf))+"\t"+str(i)+"\t"+str('%.2f' % r[i])+"\t"+str(j)+"\t"+str('%.2f' % a)+"\t"+str('%.2f' % aprime)+"\t"+str('%.2f' % AoA)+"\t"+str('%.2f' % Utot)+"\t"+str('%.2f' % TSRr)+"\t"+str('%.2f' % phi)+"\t"+str('%.2f' % Cl)+"\t"+str('%.2f' % Cd)+"\t"+str('%.2f' % F)+"\t"+str('%.2f' % sigmaprime)+"\t"+str('%.2f' % (Re/100000))+"\t"+str('%.2f' % angSpeed)+"\t"+str('%.2f' % (phi*180/pi))+"\t"+str('%.2f' % dQ)+"\t"+str('%.2f' % Cn)+"\t"+str('%.2f' % Ct)
+
+
+
+            Power = Q*angSpeed
+            Cp = Power / (0.5*rho*Uinf**3*pi*R**2)
+            powers.append(Power)
+            Qs.append(Q)
+            Cps.append(Cp)
+
+
+        self.power = powers
+        self.torque = Qs
+        self.RPMs = angSpeeds
+        self.Cps = Cps
+
+
+
+
+class Airfoil:
+
+    def __init__(self, x=None, y=None, Re=[0.5, 1, 3, 4, 5, 7, 10, 20, 50, 70, 100, 140], 
+                             AoAstart=-3, 
+                             AoAstop=25, 
+                             AoAstep=2, 
+                             Ncrit=9,
+                             blendInput=0,
+                             interpolatedInput=0,
+                             AF1 = None,
+                             AF2 = None,
+                             fileName="temp.dat",
+                             highAngleInterp=1,
+                             alfa=None,
+                             Cldata=None,
+                             Cddata=None,
+                             AR=None):
+
+        if not interpolatedInput:
+            self.interpolatedInput = False
+            self.originalx = x
+            self.originaly = y
+
+            if not blendInput:
+                self.x, self.y = np.append(x, 1), np.append(y, 0) # add the constant front
+                self.x, self.y = np.insert(self.x, 0, 1), np.insert(self.y, 0, 0) # and back coordinates
+                self.x, self.y = self.connectTheDots(self.x, self.y) # interpolate between
+            else:
+                self.x, self.y = x, y
+
+
+            self.alfa = AoAsteps(AoAstart, AoAstop, AoAstep)
+            self.Cldata = []
+            self.Cddata = []
+            self.Cmdata = []
+            self.Re = []
+            self.AoAstop = AoAstop
+            self.AoAstart = AoAstart
+            self.AR = AR
+
+            if Cldata and Cddata: # if empirical data is to be used instead of XFOIL
+                if not len(Re) == 1:
+                    print "If empirical Cl- and Cddata is used, only one Reynolds can be used matching the data."
+                else:
+                    self.Cldata.append(Cldata)
+                    self.Cddata.append(Cddata)
+                    self.alfa = alfa
+                    self.AoAstop = max(self.alfa)
+                    self.AoAstart = min(self.alfa)
+                    self.Re = Re
+
+            else: # if xfoil is to be used
+
+                self.writeDAT(self.x, self.y, fileName) # write to disk so XFOIL can read them
+                
+                for i, Rei in enumerate(Re): 
+                    
+                    alfa, Cl, Cd, Cm = self.getPolars(Rei*10**5, 
+                                                      AoAstart, 
+                                                      AoAstop, 
+                                                      AoAstep, 
+                                                      Ncrit,
+                                                      airfoil=fileName)
+                    
+                    if Cl:
+                        self.Cldata.append(Cl)
+                        self.Cddata.append(Cd)
+                        self.Cmdata.append(Cm)
+                        self.Re.append(Rei)
+
+            try:
+                self.Cldata = np.array(self.Cldata)
+                self.Cddata = np.array(self.Cddata)
+                self.Cmdata = np.array(self.Cmdata)
+
+                self.Cldata = self.fillHoles(self.Cldata)
+                self.Cddata = self.fillHoles(self.Cddata)
+                self.Cmdata = self.fillHoles(self.Cmdata)
+
+                if highAngleInterp:
+                    self.highAngleInterp()
+                    
+                # OBS: kass fix kika närmare på!
+                #self.Cddata = self.Cddata*2
+
+            except:
+                self.failed = True
+            
+        else: # interpolate between two existing AFs Cl and Cd
+            self.interpolatedInput = True
+            self.AF1 = AF1
+            self.AF2 = AF2
+            self.alfa = AF1.alfa
+            try:
+                self.AR = (AF1.AR + AF2.AR)/2
+            except:
+                if AF1.AR:
+                    self.AR = AF1.AR
+                else:
+                    self.AR = AF2.AR
+
+
+    def highAngleInterp(self):
+        ClnewdataR = []
+        CdnewdataR = []
+        ClnewdataL = []
+        CdnewdataL = []
+        CLtemp = []
+        CDtemp = []
+
+        for i, each in enumerate(self.Cldata):
+            # Todo: fix!
+            R = 10.046/2
+            chord = 0.4572
+            AR = R/chord
+            if self.AR:
+                AR = self.AR
+            print "AR=",AR
+            if AR >= 50:
+                Cdmax = 2
+            else:
+                Cdmax = 1.11 + 0.018*AR
+            B1 = Cdmax
+
+            stallAlpha = radians(self.alfa[np.argmax(self.Cldata[i])])   
+            stallAlphaInd = np.argmax(self.Cldata[i])    
+            Clstall = self.Cldata[i,stallAlphaInd]
+            Cdstall = self.Cddata[i,stallAlphaInd]
+            B2 = (Cdstall - Cdmax*sin(stallAlpha)**2)/cos(stallAlpha)
+
+            A1 = B1/2
+            A2 = (Clstall - Cdmax*sin(stallAlpha)*cos(stallAlpha))*sin(stallAlpha)/(cos(stallAlpha)**2)
+
+            # from alfa-stall to end of vector
+            alphas = np.radians(self.alfa[stallAlphaInd:])
+            alphas[alphas == 0] = 0.1 # to prevent from divide by zero
+
+            CD = B1*np.sin(alphas)**2+B2*np.cos(alphas)
+            CL = A1*np.sin(2*alphas) + A2*np.cos(alphas)**2/np.sin(alphas)
+
+            self.Cldata[i,stallAlphaInd:] = CL
+            self.Cddata[i,stallAlphaInd:] = CD
+
+            # from end of vector to alfa = 90
+            anglesTo90 = np.linspace(self.AoAstop+1, 89, 40)
+            anglesTo90rad = np.radians(anglesTo90)
+
+            CD = B1*np.sin(anglesTo90rad)**2 + B2*np.cos(anglesTo90rad)
+            CL = A1*np.sin(2*anglesTo90rad) + A2*np.cos(anglesTo90rad)**2/np.sin(anglesTo90rad)
+            
+            # alfa = 90 to 180
+            angles90to180 = np.linspace(90, 180, 40)
+            angles90to180rad = np.radians(angles90to180)
+
+            CL = np.hstack((CL, 2*np.sin(angles90to180rad)*np.cos(angles90to180rad)))
+            CD = np.hstack((CD, B1*np.sin(angles90to180rad)**2))
+            #CD = np.hstack((CD, 2*np.sin(angles90to180rad)**2)) WHUT?
+            
+            # from alfa = -180 to start of vector 
+            anglesNeg180toNeg90 = np.linspace(-180, -45, 40)
+            anglesNeg180toNeg90rad = np.radians(anglesNeg180toNeg90)
+            
+            CLneg18090 = 2*np.sin(anglesNeg180toNeg90rad)*np.cos(anglesNeg180toNeg90rad)
+            CDneg18090 = B1*np.sin(anglesNeg180toNeg90rad)**2
+            
+            ClnewdataR.append(CL)
+            CdnewdataR.append(CD)
+
+            ClnewdataL.append(CLneg18090)
+            CdnewdataL.append(CDneg18090)
+
+        self.Cldata = np.hstack((ClnewdataL, self.Cldata, np.array(ClnewdataR)))
+        self.Cddata = np.hstack((CdnewdataL, self.Cddata, np.array(CdnewdataR)))
+
+        self.alfa = np.hstack((anglesNeg180toNeg90, self.alfa, anglesTo90, angles90to180))
+
+
+    def fillHoles(self, data):
+        """ filling holes where XFOIL didn't converge instead of running again """
+        for i, each in enumerate(data):
+
+            try:
+                firstInd = np.nonzero(each)[0][0]
+                lastInd = np.nonzero(each)[0][-1]
+
+                fix = each[firstInd:lastInd]
+                x, = np.nonzero(fix)
+
+                fixed = np.interp(np.arange(len(fix)), x, fix[x])
+
+                data[i, firstInd:lastInd] = fixed
+            except:
+                """
+                Probably just zeros
+                """
+
+        return data
+
+    def connectTheDots(self, x, y):
+        tck,u = interpolate.splprep([x,y],s=0) # Find the apropiate spline
+        unew = np.arange(0,1.005,0.005)
+        out = interpolate.splev(unew,tck)
+
+        return out[0], out[1]
+    
+    def Cl(self, AoA, Re):
+        if self.interpolatedInput: # return halfway of two other AFs
+            try:
+                return (self.AF1.Cl(AoA, Re) + self.AF2.Cl(AoA, Re)) / 2
+            except:
+                return 0
+        else:
+            try:
+                if len(self.Re) == 1:
+                    f = interpolate.interp1d(self.alfa, self.Cldata[0], kind='linear')
+                    return f(AoA)
+                else:
+                    f = interpolate.interp2d(self.alfa, self.Re, self.Cldata, kind='linear')
+                    return f(AoA, Re)[0]
+                
+            except:
+                return 0
+
+    def Cd(self, AoA, Re):
+        if self.interpolatedInput: # return halfway of two other AFs
+            try:
+                return (self.AF1.Cd(AoA, Re) + self.AF2.Cd(AoA, Re)) / 2
+            except:
+                return 2
+        else:
+            try:
+                if len(self.Re) == 1:
+                    f = interpolate.interp1d(self.alfa, self.Cddata[0], kind='linear')
+                    return f(AoA)
+                else:
+                    f = interpolate.interp2d(self.alfa, self.Re, self.Cddata, kind='linear')
+                    return f(AoA, Re)[0]
+            except:
+                return 2
+
+    def writeDAT(self, x, y, fileName="temp.dat"):
+        with open(fileName, "w+") as f:
+            decimals = 4
+            f.write(fileName + '\n') # Write fileName at very top of file
+            for i in range(len(x)):
+                f.write(str(round(x[i],decimals)) + "     " + str(round(y[i],decimals)) + '\n')
+
+    def getPolars(self, Re, AoAstart, AoAstop, AoAstep, Ncrit=9, airfoil="temp.dat", surpressGUI=1):
+
+        def issueCmd(cmd, echo=True):
+            ps.stdin.write(cmd + '\n')
+
+        ps = sp.Popen([xfoilPath], 
+            stdin=sp.PIPE, 
+            stdout=sp.PIPE,
+            stderr=None,
+            shell=True)
+
+        try:
+            os.remove(str(airfoil) + '.pol') # remove file if it already exists
+        except:
+            """
+            #print "Kunde inte hitta gammal polare"
+            """
+        issueCmd('load ' + str(airfoil))
+ 
+        if surpressGUI: # make XFOIl surpress the visuals since they can make you go cray cray
+            issueCmd('PLOP')
+            issueCmd('G')
+            issueCmd('')
+
+        issueCmd('PANE') # adds points if needed
+        issueCmd('PANE')
+        issueCmd('OPER')
+
+        if not Ncrit == 9:
+            issueCmd('vpar')
+            issueCmd('n ' + str(Ncrit))
+            issueCmd('')
+
+        issueCmd('VISC ' + str(Re))
+
+        issueCmd('iter 50')
+        issueCmd('PACC')
+        issueCmd(str(airfoil) + '.pol')
+        issueCmd('')
+        issueCmd('ASEQ '+str(AoAstart)+' '+str(AoAstop)+' '+str(AoAstep))
+        #issueCmd('ASEQ -2.5 -2.0 0.05')
+        #issueCmd('ASEQ -1.5  8.0 0.5')
+        #issueCmd('ASEQ  8.2  9.0 0.2')
+        issueCmd('PACC')
+        issueCmd('')
+        issueCmd('quit')
+        outputFromTerminal = ps.stdout.read()
+        #print outputFromTerminal
+
+        with open(str(airfoil) + '.pol') as f: # read file from XFOIL
+            try:
+                content = f.readlines()
+                if len(content) > 14:
+                    content = StringIO("\n".join(content[12:]))
+                    content = np.loadtxt(content)
+                    alfa = content[:,0]
+                    CL = content[:,1]
+                    CD = content[:,2]
+                    CM = content[:,3]
+
+                    CLDict = dict(zip(alfa, CL))
+                    CDDict = dict(zip(alfa, CD))
+                    CMDict = dict(zip(alfa, CM))
+
+                    CL, CD, CM = [], [], []
+
+                    for AoA in AoAsteps(AoAstart, AoAstop, AoAstep):
+                        try:
+                            CL.append(CLDict[AoA])
+                            CD.append(CDDict[AoA])
+                            CM.append(CMDict[AoA])
+                        except KeyError:
+                            CL.append(0)
+                            CD.append(0)
+                            CM.append(0)
+
+                    print alfa, CL, CD, CM
+                    return alfa, CL, CD, CM
+                else:
+                    return None, None, None, None
+                 
+            except:
+                return None, None, None, None            
+
+
+def readDAT(fileName):
+    with open(fileName) as f:
+        x, y = [], []
+        content = f.readlines()
+
+        for row in content:
+            try:
+                left = float(row.split("     ")[0])
+                right = float(row.split("     ")[1].replace("\r\n",""))
+                
+                x.append(left)
+                y.append(right)
+            except:
+                """
+                Probably a name of the airfoil at top of file
+                """
+        return np.array(x), np.array(y)  
+
+
+
+
+
+# Canada.py
+
+# -- coding: utf-8 --
+from __future__ import division
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import interpolate
+import subprocess as sp
+import os
+from StringIO import StringIO
+import array
+import random
+from scipy import stats
+
+from deap import algorithms
+from deap import base
+from deap import creator
+from deap import tools
+
+import pylab as pl
+import matplotlib.pyplot as plt
+import scipy.interpolate
+from math import pi, atan, acos, cos, sin, tan, exp, sqrt
+from siteOpt import Airfoil, readDAT, AoAsteps, BlendAirfoils, Turbine, individualNr, readDAT
+
+# Python v 2.7
+
+
+
+#pl.plot(xs, ys)
+#pl.show()
+
+
+R = 3.3/2
+hubRadius = 0.144 # radius where the blade begins and hub ends (m)
+
+TSR = 5.3 # tip speed ratio (a.k.a. the symbol lambda)
+RPM = 200 # set only if constant RPM is to be used! otherwise set to None because this overrides tip speed ratio
+B = 3 # number of blades
+visc = 1.5e-5 # kinematic viscosity of air 
+rho = 1.225 # density of air 
+tol = 1.e-4 # convergence tolerance for a and adash
+cutIn = 3.6
+cutOut = 25
+ratedPower = 19800 # max generator power (W)
+
+chord = np.linspace(0.3,0.1,13)
+twist = np.linspace(18,1,13)
+pitch = 0
+
+# Wind distribution
+windSpeeds = np.array([0.500, 1.500, 2.500, 3.500, 4.500, 5.500, 6.500, 7.500, 8.500, 9.500, 10.500, 11.500, 12.500, 13.500, 14.500, 15.500, 16.500, 17.500, 18.500, 19.500, 20.500, 21.500, 22.500])
+windObs = np.array([0.009, 0.038, 0.115, 0.105, 0.111, 0.117, 0.090, 0.083, 0.080, 0.056, 0.048, 0.040, 0.026, 0.025, 0.016, 0.013, 0.008, 0.006, 0.004, 0.002, 0.001, 6.570e-4, 1.349e-4])
+windFrq = windObs / np.sum(windObs) # Normalized so that area under = 1
+
+cordMax = max(chord)
+cordMin = min(chord)
+Remax = sqrt(cutOut**2 + (TSR*cutOut)**2)*cordMax/visc
+Remin = sqrt(cutIn**2 + (TSR*cutIn)**2)*cordMin/visc
+
+print "remax", Remax/100000
+print "remin", Remin/100000
+
+Re = np.linspace(0.3*Remin/100000, Remax/100000, 12) # At wich Re*10^5 to evaluate. The more the better.
+#Re = np.array([5])
+
+xs,ys = readDAT("S835.dat")
+AFroot = Airfoil(xs, ys, Re=Re, fileName="tempUAEIII.dat")
+AFmid = Airfoil(xs, ys, Re=Re, fileName="tempUAEIII.dat")
+xs,ys = readDAT("S833.dat")
+AFtop = Airfoil(xs, ys, Re=Re, fileName="tempUAEIII.dat")
+
+
+theTurbine = Turbine([AFroot, AFmid, AFtop], R=R, hubRadius=hubRadius, TSR=TSR, 
+                      ratedPower=ratedPower, B=B, visc=visc, rho=rho, tol=tol, 
+                      windSpeeds=windSpeeds, windFrq=windFrq, cutIn=cutIn, 
+                      cutOut=cutOut, skipBlending=1, RPM=RPM,
+                      chord=chord, twist=twist, pitch=pitch)
+
+
+print "Turbine avg power: " + str(theTurbine.avgPower()) 
+
+
+
+fig = pl.figure(figsize=(7, 5))
+ax = fig.add_subplot(111)
+ax.set_xlabel(r'Vindhastighet (m/s)')
+ax.set_ylabel(r'Effekt (W)')
+
+p1, = pl.plot(np.linspace(cutIn, cutOut, 10), map(theTurbine.powerInterpolate, np.linspace(cutIn, cutOut, 10)))
+p2, = pl.plot([3.003, 3.396, 3.760, 4.396, 4.795, 5.168, 5.606, 5.997, 6.394, 6.803, 7.174, 7.594, 7.965, 8.382, 8.788, 9.392, 9.992, 10.482, 10.965, 11.458, 11.980, 12.963, 13.972, 14.975, 15.960, 16.941, 17.946, 18.973, 19.943, 20.957, 21.957], [9.854, 39.740, 89.446, 173.537, 241.123, 311.327, 378.113, 461.949, 549.739, 624.874, 713.140, 823.083, 921.199, 1013.881, 1112.000, 1260.177, 1383.252, 1439.452, 1465.062, 1442.051, 1393.247, 1264.776, 1260.065, 1280.887, 1356.347, 1456.759, 1576.381, 1705.854, 1833.000, 1968.527, 2112.980], 'o')
+p3, = pl.plot([2.884, 3.020, 3.156, 3.292, 3.428, 3.564, 3.700, 3.836, 3.972, 4.107, 4.243, 4.379, 4.515, 4.651, 4.787, 4.923, 5.059, 5.195, 5.330, 5.466, 5.602, 5.738, 5.874, 6.010, 6.146, 6.282, 6.418, 6.553, 6.689, 6.825, 6.961, 7.097, 7.233, 7.369, 7.505, 7.641, 7.776, 7.912, 8.048, 8.184, 8.320, 8.456, 8.592, 8.728, 8.864, 9.000, 9.135, 9.271, 9.407, 9.543, 9.679, 9.815, 9.951, 10.087, 10.223, 10.358, 10.494, 10.630, 10.766, 10.902, 11.038, 11.174, 11.310, 11.446, 11.581, 11.717, 11.853, 11.989, 12.125, 12.261, 12.397, 12.533, 12.669, 12.804, 12.940, 13.076, 13.212, 13.348, 13.484, 13.620, 13.756, 13.892, 14.027, 14.163, 14.299, 14.435, 14.571, 14.707, 14.843, 14.979, 15.115, 15.250, 15.386, 15.522, 15.658, 15.794, 15.930, 16.066, 16.202, 16.338, 16.473, 16.609, 16.745, 16.881, 17.017, 17.153, 17.289, 17.425, 17.561, 17.696, 17.832, 17.968, 18.104, 18.240, 18.376, 18.512, 18.648, 18.784, 18.920, 19.055, 19.191, 19.327, 19.463, 19.599, 19.735, 19.871, 20.007, 20.143, 20.278, 20.414, 20.550, 20.686, 20.822, 20.958, 21.094, 21.230, 21.366, 21.501, 21.637, 21.773, 21.909, 22.045, 22.181, 22.317, 22.453], [0, 5.582, 17.756, 29.930, 43.625, 58.842, 75.581, 90.799, 109.059, 128.841, 148.624, 169.928, 192.754, 217.101, 242.970, 270.361, 296.230, 325.143, 354.056, 387.533, 421.011, 454.489, 491.010, 529.053, 565.574, 605.139, 646.225, 688.833, 731.441, 774.049, 816.657, 859.265, 901.873, 944.481, 987.090, 1029.698, 1070.784, 1107.305, 1142.305, 1172.739, 1201.652, 1229.042, 1256.433, 1280.781, 1306.650, 1327.954, 1346.215, 1364.475, 1381.214, 1394.910, 1407.083, 1419.257, 1428.387, 1429.909, 1428.387, 1428.387, 1428.387, 1425.344, 1419.257, 1410.127, 1400.996, 1388.823, 1372.084, 1352.301, 1334.041, 1315.780, 1297.520, 1280.781, 1265.564, 1250.347, 1232.086, 1212.304, 1189.478, 1171.217, 1152.957, 1137.740, 1122.522, 1107.305, 1089.045, 1073.828, 1063.175, 1054.045, 1044.915, 1038.828, 1035.785, 1032.741, 1031.219, 1029.698, 1029.698, 1031.219, 1032.741, 1035.785, 1038.828, 1043.393, 1047.958, 1052.523, 1057.089, 1063.175, 1069.262, 1073.828, 1079.914, 1086.001, 1093.610, 1099.697, 1105.784, 1111.870, 1117.957, 1125.566, 1133.174, 1139.261, 1148.391, 1154.479, 1163.609, 1169.696, 1178.826, 1184.913, 1194.043, 1203.173, 1209.260, 1218.391, 1227.521, 1236.651, 1242.738, 1251.868, 1260.999, 1270.129, 1279.259, 1288.389, 1297.520, 1306.650, 1315.780, 1324.911, 1334.041, 1343.171, 1352.301, 1362.954, 1373.606, 1382.736, 1391.866, 1400.996, 1410.127, 1420.779, 1431.431, 1440.561, 1448.170], '-')
+
+pl.legend([p1, p2, p3], ['Studiens modell (SiteOpt)', 'Experimentell data', u'BEM-data från WT_PERF'], loc=4)
+
+x1,x2,y1,y2 = pl.axis()
+pl.axis((0,25,0,2500))
+
+pl.grid()
+
+
+pl.show()
+fig.savefig('Canada.eps', dpi=fig.dpi)
+
+
+TSRs = [2,3,4,5,6,7,8,9,10,11,12,13] 
+Re = np.array([1])
+
+Cps = []
+
+cutIn = 3.6
+cutOut = 3.6
+RPM = None
+
+for TSR in TSRs:
+
+	theTurbine = Turbine([AFroot, AFmid, AFtop], R=R, hubRadius=hubRadius, TSR=TSR, 
+	                      ratedPower=ratedPower, B=B, visc=visc, rho=rho, tol=tol, 
+	                      windSpeeds=windSpeeds, windFrq=windFrq, cutIn=cutIn, 
+	                      cutOut=cutOut, skipBlending=1, RPM=RPM,
+	                      chord=chord, twist=twist, pitch=pitch)
+	Cps.append(theTurbine.Cps[0])
+	print theTurbine.Cps[0]
+
+
+fig4 = pl.figure(figsize=(8, 5))
+ax4 = fig4.add_subplot(111)
+p1, = pl.plot(TSRs, Cps)
+p2, = pl.plot([1.517, 1.670, 1.847, 2.093, 2.216, 2.374, 2.568, 2.776, 2.905, 3.031, 3.185, 3.343, 3.494, 3.633, 3.896, 4.085, 4.284, 4.522, 4.769, 5.062, 5.382, 5.561, 5.762, 6.210, 6.423, 6.700, 6.981, 7.280, 7.980, 8.348, 8.798, 9.309, 10.462, 11.150], [0.037, 0.044, 0.052, 0.063, 0.073, 0.088, 0.110, 0.154, 0.182, 0.211, 0.237, 0.263, 0.279, 0.296, 0.319, 0.336, 0.351, 0.364, 0.372, 0.388, 0.408, 0.407, 0.409, 0.419, 0.424, 0.423, 0.416, 0.403, 0.370, 0.352, 0.320, 0.264, 0.136, 0.023], 'o')
+
+x1,x2,y1,y2 = pl.axis()
+#pl.axis((-3,25,0,0.25))
+pl.legend([p1, p2], ["Studiens modell (SiteOpt) 3,6 m/s", "Experimentell data 3,6 m/s"], loc=8)
+ax4.set_xlabel(r'Tip Speed Ratio $\lambda$')
+ax4.set_ylabel(u'$C_p$')
+pl.grid()
+pl.show()
+
+
+
+
+# GA.py
+
+# -- coding: utf-8 --
+from __future__ import division
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import interpolate
+import subprocess as sp
+import os
+from StringIO import StringIO
+import array
+import random
+from scipy import stats
+
+from deap import algorithms
+from deap import base
+from deap import creator
+from deap import tools
+
+import pylab as pl
+import matplotlib.pyplot as plt
+import scipy.interpolate
+from math import pi, atan, acos, cos, sin, tan, exp, sqrt, floor
+from siteOpt import Airfoil, readDAT, AoAsteps, BlendAirfoils, Turbine, individualNr, readTUR
+
+# Python v 2.7
+
+# Initiate fixed variables
+
+R = 10.046/2
+hubRadius = 0.72 # radius where the blade begins and hub ends (m)
+
+TSR = 8 # tip speed ratio (a.k.a. the symbol lambda)
+RPM = 71.63 # set only if constant RPM is to be used! otherwise set to None
+B = 3 # number of blades
+visc = 1.5e-5 # kinematic viscosity of air 
+rho = 1.225 # density of air 
+tol = 1.e-4 # convergence tolerance for a and adash
+cutIn = 5
+cutOut = 25
+ratedPower = 19800 # max generator power (W)
+
+chord = [0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572, 0.4572]
+twist = [44, 44, 36, 24, 20, 16, 13, 10, 9, 4, 2, 1, 0] 
+pitch = 3
+
+# Wind distribution
+windSpeeds = np.array([0.500, 1.500, 2.500, 3.500, 4.500, 5.500, 6.500, 7.500, 8.500, 9.500, 10.500, 11.500, 12.500, 13.500, 14.500, 15.500, 16.500, 17.500, 18.500, 19.500, 20.500, 21.500, 22.500])
+windObs = np.array([0.009, 0.038, 0.115, 0.105, 0.111, 0.117, 0.090, 0.083, 0.080, 0.056, 0.048, 0.040, 0.026, 0.025, 0.016, 0.013, 0.008, 0.006, 0.004, 0.002, 0.001, 6.570e-4, 1.349e-4])
+windFrq = windObs / np.sum(windObs) # Normalized so that area under = 1
+
+cordMax = max(chord)
+cordMin = min(chord)
+Remax = sqrt(cutOut**2 + (TSR*cutOut)**2)*cordMax/visc
+Remin = sqrt(cutIn**2 + (TSR*cutIn)**2)*cordMin/visc
+
+print "remax", Remax/100000
+print "remin", Remin/100000
+
+#Re = np.linspace(0.1*Remin/100000, Remax/100000, 3) # At wich Re*10^5 to evaluate. The more the better.
+Re = np.array([20])
+
+
+
+
+# Set up GA with package DEAP for a single objective optimization
+
+creator.create("FitnessMax", base.Fitness, weights=(1.0,))
+creator.create("Individual", np.ndarray, fitness=creator.FitnessMax)
+
+toolbox = base.Toolbox()
+
+# Function evaluating rotor anunal yield
+
+def fitnessFunc(individual):
+
+    individualNumber = str(individualNr.next()) # Counter used in naming files with individual number
+
+    # Split up the genome in nice chunks
+    twistAndChord = individual[66:]
+    twistData = twistAndChord[:4]
+    chordData = twistAndChord[4:]
+    foilData = individual[:66]
+    foilData = np.split(foilData, 3) 
+    
+    rootFoil = foilData[0]
+    rootFoil = np.split(rootFoil, 2) 
+    rootFoilx = rootFoil[0]
+    rootFoily = rootFoil[1]
+
+    midFoil = foilData[1]
+    midFoil = np.split(midFoil, 2) 
+    midFoilx = midFoil[0]
+    midFoily = midFoil[1]
+
+    topFoil = foilData[2]
+    topFoil = np.split(topFoil, 2) 
+    topFoilx = topFoil[0]
+    topFoily = topFoil[1]
+
+
+    try:
+        AFroot = Airfoil(rootFoilx, rootFoily, Re=Re)
+        AFmid = AFroot
+        AFtop = AFroot
+
+        top = AFroot.y[3:(floor(len(AFroot.y)/2)-3)]
+        bott = AFroot.y[(4+floor(len(AFroot.y)/2)):-3]
+        bott = bott[::-1]
+
+        # If a y-coordinate that should be above is below
+        if False in (top > bott): 
+            return [(-99999)]
+        """
+        fig = pl.figure(figsize=(9, 3.4))
+        ax = fig.add_subplot(111)
+        ax.set_xlabel(r'x/c')
+        ax.set_ylabel(r'y/c')
+        pl.plot(AFroot.originalx, AFroot.originaly, 'ko')
+        pl.plot(AFroot.x, AFroot.y, 'r')
+        plt.plot(1, 0, 'ro')
+        x1,x2,y1,y2 = pl.axis()
+        pl.axis((x1,x2,y1,y2))
+        pl.grid()
+        pl.show()
+        fig.savefig('connectTheDots3.eps', dpi=fig.dpi)
+        """
+
+        AFmid = AFroot
+        AFtop = AFroot
+        #AFmid = Airfoil(midFoilx, midFoily, Re=Re)
+        #AFtop = Airfoil(topFoilx, topFoily, Re=Re)
+    except:
+        return [(-99999)] # if xfoil fails
+
+    """
+    theTurbine = Turbine([AFroot, AFmid, AFtop], R=R, hubRadius=hubRadius, TSR=TSR, 
+                          ratedPower=ratedPower, B=B, visc=visc, rho=rho, tol=tol, 
+                          windSpeeds=windSpeeds, windFrq=windFrq, cutIn=cutIn, 
+                          cutOut=cutOut, skipBlending=1, RPM=RPM, metaData=individual, indNr=individualNumber,
+                          chord=chord, twist=twist, pitch=pitch)
+
+    """
+    # Use twist and chorddist from GA
+    theTurbine = Turbine([AFroot, AFmid, AFtop], R=R, hubRadius=hubRadius, TSR=TSR, 
+                          ratedPower=ratedPower, B=B, visc=visc, rho=rho, tol=tol, 
+                          windSpeeds=windSpeeds, windFrq=windFrq, cutIn=cutIn, 
+                          cutOut=cutOut, skipBlending=1, RPM=RPM, metaData=individual, indNr=individualNumber,
+                          chord=chord, twist=twist, pitch=pitch,
+                          twistData=twistData.tolist(), chordData=chordData.tolist())
+    
+    
+    try:
+        #print "Turbine avg power: " + str(theTurbine.avgPower()) + " W, Ind no: " + individualNumber + ". " + str(theTurbine.power)
+        print "Turbine avg power: " + str(theTurbine.avgPower()) + " W, Ind no: " + individualNumber 
+
+        return [(theTurbine.avgPower())]
+    except:
+        return [(-99999)]
+
+
+def addPercent(value, percent):
+    return value*(percent/100 + 1)
+
+def removePercent(value, percent):
+    return value*(1 - percent/100)
+
+diff = 10 # percent
+
+# Generate attributes around a S809 - Root
+
+# Top side
+toolbox.register("Rx2", random.uniform, removePercent(0.801, diff), addPercent(0.801, diff))
+toolbox.register("Ry2", random.uniform, removePercent(0.038, diff), addPercent(0.038, diff))
+toolbox.register("Rx3", random.uniform, removePercent(0.647, diff), addPercent(0.647, diff))
+toolbox.register("Ry3", random.uniform, removePercent(0.068, diff), addPercent(0.068, diff))
+toolbox.register("Rx4", random.uniform, removePercent(0.413, diff), addPercent(0.413, diff))
+toolbox.register("Ry4", random.uniform, removePercent(0.101, diff), addPercent(0.101, diff))
+toolbox.register("Rx5", random.uniform, removePercent(0.236, diff), addPercent(0.236, diff))
+toolbox.register("Ry5", random.uniform, removePercent(0.089, diff), addPercent(0.089, diff))
+toolbox.register("Rx6", random.uniform, removePercent(0.1, diff), addPercent(0.1, diff))
+toolbox.register("Ry6", random.uniform, removePercent(0.059, diff), addPercent(0.059, diff))
+
+# Front
+toolbox.register("Rx7", random.uniform, removePercent(0, 0), addPercent(0, 0))
+toolbox.register("Ry7", random.uniform, removePercent(0, 0), addPercent(0, 0))
+
+# Bottom side
+toolbox.register("Rx8", random.uniform, removePercent(0.1, diff), addPercent(0.1, diff))
+toolbox.register("Ry8", random.uniform, removePercent(-0.056, diff), addPercent(-0.05, diff))
+toolbox.register("Rx9", random.uniform, removePercent(0.236, diff), addPercent(0.2, diff))
+toolbox.register("Ry9", random.uniform, removePercent(-0.094, diff), addPercent(-0.09, diff))
+toolbox.register("Rx10", random.uniform, removePercent(0.413, diff), addPercent(0.3, diff))
+toolbox.register("Ry10", random.uniform, removePercent(-0.107, diff), addPercent(-0.11, diff))
+toolbox.register("Rx11", random.uniform, removePercent(0.647, diff), addPercent(0.5, diff)) 
+toolbox.register("Ry11", random.uniform, removePercent(-0.056, diff), addPercent(-0.094, diff))
+toolbox.register("Rx12", random.uniform, removePercent(0.801, diff), addPercent(0.8, diff))
+toolbox.register("Ry12", random.uniform, removePercent(-0.020, diff), addPercent(-0.02, diff))
+
+# Generate attributes around a naca4418 - Mid
+
+# Top side
+toolbox.register("Mx2", random.uniform, 0.7, 0.9)
+toolbox.register("My2", random.uniform, 0.06, 0.07)
+toolbox.register("Mx3", random.uniform, 0.4, 0.6)
+toolbox.register("My3", random.uniform, 0.1, 0.15)
+toolbox.register("Mx4", random.uniform, 0.2, 0.3)
+toolbox.register("My4", random.uniform, 0.10, 0.15)
+toolbox.register("Mx5", random.uniform, 0.09, 0.11)
+toolbox.register("My5", random.uniform, 0.085, 0.095)
+toolbox.register("Mx6", random.uniform, 0.023, 0.027) 
+toolbox.register("My6", random.uniform, 0.048, 0.052)
+
+# Front
+toolbox.register("Mx7", random.uniform, 0.0001, 0.0002) 
+toolbox.register("My7", random.uniform, 0.0001, 0.0002)
+
+# Bottom side
+toolbox.register("Mx8", random.uniform, 0.012, 0.0128) 
+toolbox.register("My8", random.uniform, -0.0001, -0.020)
+toolbox.register("Mx9", random.uniform, 0.0730, 0.0770) 
+toolbox.register("My9", random.uniform, -0.02, -0.05)
+toolbox.register("Mx10", random.uniform, 0.19, 0.21) 
+toolbox.register("My10", random.uniform, -0.054, -0.056)
+toolbox.register("Mx11", random.uniform, 0.39, 0.41) 
+toolbox.register("My11", random.uniform, -0.056, -0.048)
+toolbox.register("Mx12", random.uniform, 0.69, 0.71) 
+toolbox.register("My12", random.uniform, -0.048, -0.025)
+
+# Generate attributes around a naca4418 - Top
+
+# Top side
+toolbox.register("Tx2", random.uniform, 0.7, 0.9)
+toolbox.register("Ty2", random.uniform, 0.06, 0.07)
+toolbox.register("Tx3", random.uniform, 0.4, 0.6)
+toolbox.register("Ty3", random.uniform, 0.1, 0.15)
+toolbox.register("Tx4", random.uniform, 0.2, 0.3)
+toolbox.register("Ty4", random.uniform, 0.10, 0.15)
+toolbox.register("Tx5", random.uniform, 0.09, 0.11)
+toolbox.register("Ty5", random.uniform, 0.085, 0.095)
+toolbox.register("Tx6", random.uniform, 0.023, 0.027) 
+toolbox.register("Ty6", random.uniform, 0.048, 0.052)
+
+# Front
+toolbox.register("Tx7", random.uniform, 0.0001, 0.0002) 
+toolbox.register("Ty7", random.uniform, 0.0001, 0.0002)
+
+# Bottom side
+toolbox.register("Tx8", random.uniform, 0.012, 0.0128) 
+toolbox.register("Ty8", random.uniform, -0.0001, -0.020)
+toolbox.register("Tx9", random.uniform, 0.0730, 0.0770) 
+toolbox.register("Ty9", random.uniform, -0.02, -0.05)
+toolbox.register("Tx10", random.uniform, 0.19, 0.21) 
+toolbox.register("Ty10", random.uniform, -0.054, -0.056)
+toolbox.register("Tx11", random.uniform, 0.39, 0.41) 
+toolbox.register("Ty11", random.uniform, -0.056, -0.048)
+toolbox.register("Tx12", random.uniform, 0.69, 0.71) 
+toolbox.register("Ty12", random.uniform, -0.048, -0.025)
+
+# Twist 
+toolbox.register("Tmax", random.uniform, 45, 50)
+toolbox.register("Tx", random.uniform, 0.7, 0.9)
+toolbox.register("Ty", random.uniform, 10, 2)
+toolbox.register("Tmin", random.uniform, 1, -1)
+
+# Chord 
+toolbox.register("Cmax", random.uniform, 0.40, 0.42)
+toolbox.register("Cx", random.uniform, 0.4, 0.6)
+toolbox.register("Cy", random.uniform, 0.40, 0.42)
+toolbox.register("Cmin", random.uniform, 0.40, 0.42)
+
+
+
+toolbox.register("individual", tools.initCycle, creator.Individual,
+                 (toolbox.Rx2, toolbox.Rx3, toolbox.Rx4, toolbox.Rx5, toolbox.Rx6, toolbox.Rx7, 
+                  toolbox.Rx8, toolbox.Rx9, toolbox.Rx10, toolbox.Rx11, toolbox.Rx12, 
+                  toolbox.Ry2, toolbox.Ry3, toolbox.Ry4, toolbox.Ry5, toolbox.Ry6, toolbox.Ry7, 
+                  toolbox.Ry8, toolbox.Ry9, toolbox.Ry10, toolbox.Ry11, toolbox.Ry12, 
+
+                  toolbox.Mx2, toolbox.Mx3, toolbox.Mx4, toolbox.Mx5, toolbox.Mx6, toolbox.Mx7, 
+                  toolbox.Mx8, toolbox.Mx9, toolbox.Mx10, toolbox.Mx11, toolbox.Mx12, 
+                  toolbox.My2, toolbox.My3, toolbox.My4, toolbox.My5, toolbox.My6, toolbox.My7, 
+                  toolbox.My8, toolbox.My9, toolbox.My10, toolbox.My11, toolbox.My12, 
+
+                  toolbox.Tx2, toolbox.Tx3, toolbox.Tx4, toolbox.Tx5, toolbox.Tx6, toolbox.Tx7, 
+                  toolbox.Tx8, toolbox.Tx9, toolbox.Tx10, toolbox.Tx11, toolbox.Tx12, 
+                  toolbox.Ty2, toolbox.Ty3, toolbox.Ty4, toolbox.Ty5, toolbox.Ty6, toolbox.Ty7, 
+                  toolbox.Ty8, toolbox.Ty9, toolbox.Ty10, toolbox.Ty11, toolbox.Ty12, 
+
+                  toolbox.Tmax, toolbox.Tx, toolbox.Ty, toolbox.Tmin,
+
+                  toolbox.Cmax, toolbox.Cx, toolbox.Cy, toolbox.Cmin), n=1)
+
+toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+
+ 
+individualNr = individualNr()
+
+toolbox.register("evaluate", fitnessFunc)
+toolbox.register("mate", tools.cxTwoPoints)
+toolbox.register("mutate", tools.mutGaussian, mu=0.0, sigma=0.02, indpb=0.1)
+toolbox.register("select", tools.selTournament, tournsize=3)
+
+def main():
+    random.seed(63)
+    
+    pop = toolbox.population(n=600)
+    hof = tools.HallOfFame(1)
+    stats = tools.Statistics(lambda ind: ind.fitness.values)
+    stats.register("avg", tools.mean)
+    stats.register("std", tools.std)
+    stats.register("min", min)
+    stats.register("max", max)
+    
+    algorithms.eaSimple(pop, toolbox, cxpb=0.5, mutpb=0.1, ngen=10000, stats=stats,
+                        halloffame=hof, verbose=True)
+    
+    return pop, stats, hof
+
+if __name__ == "__main__":
+    main()
+
+
+
+
+
+\end{pythoncode}

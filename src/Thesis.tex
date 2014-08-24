@@ -1,0 +1,178 @@
+%% ----------------------------------------------------------------
+%% Thesis.tex
+%% ---------------------------------------------------------------- 
+\documentclass[swedish]{ecsthesis}      % Use the Thesis Style
+%%\usepackage{tocbibind}
+\usepackage[swedish]{babel}
+
+%\usepackage{float}
+%\floatstyle{plaintop}
+%\restylefloat{table}
+
+\usepackage{translator}
+
+\usepackage[captionskip=17pt]{floatrow}
+\floatsetup[table]{capposition=top}
+
+\addto\captionsswedish{
+  \renewcommand{\contentsname}%
+    {Innehållsförteckning}%
+}
+
+
+\usepackage{booktabs}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{minted}
+
+\graphicspath{{Figures/}}   % Location of your graphics files
+\usepackage{natbib}            % Use Natbib style for the refs.
+\usepackage{verbatim}
+\hypersetup{colorlinks=false}   % Set to false for black/white printing
+\usepackage{pdfpages}
+
+
+\usepackage[bordercolor=white,backgroundcolor=gray!30,linecolor=black,colorinlistoftodos]{todonotes}
+\newcommand{\rework}[1]{\todo[color=yellow,inline]{#1}}
+
+\usepackage{soulutf8}
+\usepackage{color}
+
+\usepackage{listings}
+\lstset{basicstyle=\ttfamily\normalsize}
+\usepackage{hyperref}
+
+\usepackage{rotating}% http://ctan.org/pkg/rotating
+\usepackage{floatpag}% http://ctan.org/pkg/floatpag
+\usepackage{fancyhdr}% http://ctan.org/pkg/fancyhdr
+\fancypagestyle{floatpage}{%
+  \fancyhf{}% Clear page header/footer
+  \renewcommand{\headrulewidth}{0pt}% No header rule
+  \fancyfoot[C]{\makebox[\textwidth][r]{%
+    \smash{\raisebox{\dimexpr\footskip+.5\textheight}{\rotatebox{90}{\thepage}}}}}%
+}
+
+
+\usepackage[intoc]{nomencl}
+\makenomenclature
+\nomenclature{$\Omega$}{Vinkelhastighet}
+\nomenclature{$a$}{Axiell induktionsfaktor}
+\nomenclature{$a'$}{Tangentiell induktionsfaktor}
+\nomenclature{$C_{\theta}$}{Förkortning för $2 a' \Omega r$}
+\nomenclature{$dr$}{Bladelementens bredd (m)}
+\nomenclature{$V_{tot}$}{Total hastighet för en vingprofil uppkommen genom rotorbladets rotation samt den inkommande vinden}
+\nomenclature{$\theta_p$}{Rotorbladets pitch (rotation av rotorbladet)}
+\nomenclature{$\beta$}{Lokal vridning längs rotorbladets vingprofil i jämförelse med topp-vingprofilens vinkel}
+\nomenclature{$\alpha$}{Angreppsvinkel}
+\nomenclature{$F_n$}{Kraft i normalriktningen}
+\nomenclature{$F_t$}{Kraft i tangentialriktningen}
+\nomenclature{$dQ$}{Tillskott till vridmomentet}
+\nomenclature{$Q$}{Vridmoment}
+\nomenclature{$dT$}{Tillskott till tryckkraften}
+\nomenclature{$T$}{Tryckkraft}
+\nomenclature{$B$}{Antal blad på vindkraftverket}
+\nomenclature{$\sigma$}{Lokal solidity}
+\nomenclature{$C_T$}{Dimensionslös tryckkraft}
+\nomenclature{$C_l$}{Dimensionslös lyftkraft}
+\nomenclature{$C_d$}{Dimensionslös motståndskraft}
+\nomenclature{$r_{hub}$}{Radien där rotorbladets vinge börjar (m)}
+\nomenclature{$\overline{P}$}{Genomsnittseffekt}
+\nomenclature{$L$}{Lyftkraft}
+\nomenclature{$D$}{Motståndskraft}
+\nomenclature{$N$}{Normalkraft}
+\nomenclature{$\gamma$}{Gir i vindkraftverkets torn}
+\nomenclature{$c$}{Korda}
+\nomenclature{$\lambda$}{Löptal (eng: tip speed ratio)}
+\nomenclature{$V_\infty$}{Friströmshastigheten långt innan rotorplanet}
+\nomenclature{$Re$}{Reynolds tal}
+\nomenclature{UAE}{Unsteady Aerodynamics Experiment (experiment utförda vid NREL)}
+\nomenclature{NREL}{National Renewable Energy Laboratory}
+\nomenclature{Märkeffekt}{Högsta effekt som en generator klarar av att producera}
+\nomenclature{$AR$}{Aspect ratio - förhållande mellan kordan och radien vid 80 \% av radien.}
+\nomenclature{$F$}{Prantls toppförlustfaktor}
+\nomenclature{$\rho$}{Luftens densitet}
+\nomenclature{$r$}{Lokal radie längs rotorbladet (m)}
+\nomenclature{$r$}{Lokal radie längs rotorbladet (m)}
+
+\renewcommand{\nomname}{Nomenklatur}
+
+
+\usepackage{footnote}
+\usepackage[bottom]{footmisc}
+\makesavenoteenv{tabular}
+
+
+
+%% ----------------------------------------------------------------
+\begin{document}
+
+
+
+
+
+\includepdf[pages={1}]{forsattsblad}
+\frontmatter
+
+\begin{comment}
+    
+    %\end{split}
+    
+    \title      {Aerodynamisk optimering av ett rotorblad med BEM-teori, genetisk algoritm och Xfoil}
+    \authors    {\texorpdfstring
+                 {\href{mailto:maxberggren@gmail.com}{Max Berggren}}
+                 {Max Berggren}
+                }
+    \addresses  {\groupname\\\deptname\\\univname}
+    \date       {\today}
+    \subject    {}
+    \keywords   {}
+    \maketitle
+\end{comment}
+
+\addcontentsline{toc}{chapter}{Sammanfattning}
+\begin{abstract}\noindent\begin{quotation}\noindent\small\begin{center}\textbf{ABSTRACT}\smallskip\end{center} This study presents a methodology that enables the annual average power of a wind turbine to be increased by automatically optimizing it's airfoil, twist and chord distribution. As a part of the study the software SiteOpt has been developed. This software connects the open source software XFOIL with the blade element momentum theory. XFOIL gives lift and drag coefficients which enable the blade element momentum theory to predict the power of a wind turbine at different wind and rotational speeds. An optimization algorithm of the type genetic algorithms is used to develop a new rotor blade. An academic benchmark case (Unsteady Aerodynamics Experiment Phase III) was selected as a starting point of the optimization because wind tunnel data was available for that campain. With the geometry developed by the genetic algoritm a theoretical increase of  15 \% more power could be extracted. However, it has been shown that the model has shortcomings at high wind speeds where the predicted power does not match wind tunnel data. This is thought to be related to that the model assumes a completely rigid blade. In real world applications a rotorblade will bend on higher wind speeds (about 8 m/s). It is therefore concluded that the model in its current form is flawed and that future work should aim to take these effects into account. However, a wind histogram for a specific location was used in order to calculate the annual average power for the wind turbine. The wind histogram used in this study to obtain the results has it's wind speeds 81 \% before 10 m/s where the model is acceptable. Therefore the results are largely to be considered accurate. \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \end{quotation}
+
+
+
+\begin{quotation}\noindent  \\ \\ \\ \\ \\ \small\begin{center}\textbf{SAMMANFATTNING}\end{center}\smallskip I denna studie presenteras en metod som möjliggör att ett vindkraftverks årliga genomsnittseffekt kan ökas genom att vingprofiler, korda- och twistdistributioner automatiskt optimeras. För studien har därför programvaran SiteOpt utvecklats. Denna sammanbinder den öppna programvaran XFOIL med den så kallade ``blade element momentum''-teorin. XFOIL kan för vingprofiler ta fram lyft- och motståndskoefficienter vilka möjliggör för ``blade element momentum''-teorin att ta fram ett vindkraftverks effekt vid olika vindhastigheter och rotationshastigheter. En optimeringsalgoritm av typen genetiska algoritmer har använts för att utifrån ett referensfall ta fram ett optimerat rotorblad. I detta fallet valdes ett akademiskt vindkraftverk (Unsteady Aerodynamics Experiment Phase III) där vindtunneldata fanns tillgänglig. Genom att den genetiska algoritmen optimerade vingprofilens geometri kunde teoretiskt 15 \% mer effektuttag göras och en ny vingprofil presenteras i studien. Däremot har det visats att den för studien utvecklade modellen har avvikelser från verkligheten vid höga vindhastigheter. Detta tros ha att göra med att modellen förutsätter ett helt stelt blad, medans verkligheten ofta medför blad som böjer sig vid höga vindhastigheter (c:a 8 m/s). Det konstateras därför att modellen i sin nuvarande form har vissa brister och att framtida arbete bör inrikta sig på att ta hänsyn till dessa hållfasthetsaspekter. Däremot används ett vindhistogram för en specifik plats för att beräkna ett vindkraftverks årliga genomsnittseffekt. Då vindhistogrammet som godtyckligt användes har vindhastigheter som till 81 \% ligger innan 10 m/s, konstateras det att resultatet som presenteras till stor del ändå är giltigt då det använder den delen av modellen som visats ge god överensstämmelse med verkligheten.
+\end{quotation}\end{abstract}
+
+\addcontentsline{toc}{chapter}{Innehållsförteckning}
+\tableofcontents
+\listoffigures
+\addcontentsline{toc}{chapter}{Figurlista}
+\listoftables
+\addcontentsline{toc}{chapter}{Tabellista}
+
+
+
+\printnomenclature
+
+
+
+
+
+\mainmatter
+%% ----------------------------------------------------------
+\include{Introduction}
+\include{Method}
+\include{Results}
+\include{Discussion}
+\appendix
+
+\backmatter
+%\bibliographystyle{ecs}
+\bibliographystyle{authordate1}
+\bibliography{ECS}
+\include{AppendixA}
+\include{AppendixB}
+\end{document}
+%% ----------------------------------------------------------
+
+
+
+
+
+
+

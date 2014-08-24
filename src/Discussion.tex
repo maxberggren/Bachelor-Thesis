@@ -1,0 +1,122 @@
+%% ----------------------------------------------------------------
+%% Discussion.tex
+%% ---------------------------------------------------------------- 
+\chapter{Diskussion} \label{Chapter:diskussion}
+
+\section{Sammanfattning}
+
+I studien har en metodologi utvecklats för att kunna optimera ett vindkraftverks rotorblad för ett användarvalt vindhastighetsförhållande. Givet vindhastighetsdata och via den för studien utvecklade programvaran, där \textsc{Bem}-teori implementerats - kan en genomsnittseffekt erhållas. Detta används som målfunktion i en optimeringsalgoritm av slaget genetiska algoritmer, vilket producerar ett optimerat rotorblad. 
+
+Följande punkter sammanfattar studiens metodologi:
+
+\begin{description}
+  \item[Vingprofilsrepresentation] Vingprofiler har representerats genom att 12 diskreta punkter sammanbundits av kubiska B-splines. Detta har visats vara en avvägning mellan mycket detaljer och hög beräkningstid samt få detaljer och inskränkt designrymd.
+  \item[Rotorbladssrepresentation] Ett vindkraftverks rotorblad har beskrivits med tre vingprofiler (rot, mellan och topp) där mellanliggande vingprofiler interpoleras fram. Detta resulterar i 12 radiella bladelement. Vingprofilerna sattes till en och samma i alla positioner vid optimeringen för att påskynda resultaten. 
+  
+
+  \item[Vingprofilers aerodynamiska egenskaper] Programvaran \textsc{Xfoil} har använts för att erhålla lyft- och motståndskoefficienter ($C_l$ och $C_d$). Givet en vingprofil, attackvinkel $\alpha$ och Reynolds tal $Re$ kunde detta erhållas till relativt låg beräkningskostnad. Möjlighet att utvärdera för lyft- och motståndskoefficient vid flera $Re$ gavs men för att åter igen spara tid, utvärderades dessa endast vid $Re = 20\times10^5$.
+  
+Eftersom \textsc{Xfoil} inte kan ge resultat långt efter stallvinkeln $\alpha_{stall}$ görs en extrapolering med viternaekvationerna, det antas även att vingprofilen beter sig som en platta vid extremt höga och låga attackvinklar. Denna extrapolering ger då lyft- och motståndskoefficienter för hela spannet $\pm 180^{\circ}$.
+  
+  
+  
+  \item[Vindkraftverks effekt] \textsc{Bem}-metoden ger ett vindkraftverks uppskattade effekt vid olika vindhastigheter. Genom att para denna data med vindhastighetsdata för ett specifikt vindförhållande har en genomsnittseffekt $\overline{P}$ kunnat tas fram. Detta har sedan använts som målunktion i optimeringsprocessen. I studien användes godtyckligt vinddata för St. Lawrence i Kanada.
+  
+  \item[Optimering] En genetisk algoritm har använts via Pythonbiblioteket \textsc{Deap} som genom att imitera evolutionen itererar fram vindkraftverk med högre genomsnittseffekt.
+  
+\end{description}
+
+Följande resultat kunde sedan presenteras:
+
+\begin{description}
+
+\item[Utvärdering av modell] Genom att utgå från ett akademiskt vindkraftverk (Unsteady Aerodynamics Experiment Phase III, UAE III) där vingprofilen S809 används längs hela rotorbladet har metodologins modell utvärderats. Här visas att den för studien utvecklade modellen (SiteOpt) dramatiskt överskattar ett vindkraftverks effekt för vindhastigheter över 8 m/s, men ger god överensstämmelse innan 8 m/s.
+
+\item[Resultat av optimering] En optimering av slaget genetisk algoritm har sedan utförts. Detta har gjorts med hänsyn till den inmatade vinddatan. Denna visas till 81 \% ligga innan 10 m/s där modellen visar acceptabel överensstämmelse med vindtunneldata. Detta resulterade i en ny vingprofil  som ses i \fref{AFjamforelse} samt en \emph{twist}- och kordadistribution. Detta resultat har enligt modellen ett ökat genomsnittseffektuttag över ett år på 15 \% jämfört med utgångspunkten UAE III.
+
+\end{description}
+
+%Resultaten visade att 15 \% ökat effektuttag jämfört med utgångspunkten UAE III teoretiskt kunde erhållas
+
+
+\section{Slutsatser}
+\label{slutsatser}
+
+Följande slutsatser kan dras från resultaten, och presenteras här med viktigast slutsats först och sedan i fallande ordning.
+
+\begin{enumerate}
+
+    \item Studiens modell (SiteOpt) visar en ökning av genomsnittseffekten $\overline{P}$ på 15 \% mot referensfallet UAE III efter att optimeringen genomförts. Detta betyder att med den föreslagna optimerade vingprofilen (\fref{AFjamforelse}) och korda/\emph{twist}-distribution (\fref{kordatwistjamforelse}) kan teoretiskt sätt 15 \% mer elektricitet tas ut årligen än utgångspunkten. Detta givet att modellen är en bra representation av verkligheten. 
+      
+    \item Studiens modell har dessvärre visats vara en dålig representation av verkligheten efter c:a 8 m/s. Varför avvikelsen uppstår har inte kunnat fastställas och en annan programvara med implementering av BEM har visats ha betydligt bättre överensstämmelse efter 8 m/s. Samma avvikelse har dock hittats i en annan studentuppsats \citep{CST}. Följande är eventuella förklaringar till avvikelsen:
+    
+        \begin{enumerate}
+        \item I denna studie har ingen hänsyn tagits till hållfasthetsaspekter eller rotorblads böjbarhet utan ett helt stelt rotorblad antas. Vid höga vindhastigheter, beroende på rotorbladets material - kommer en krökning i vindens riktning uppstå. Detta gör sannolikt upphov till radiellt flöde. För att \textsc{Bem} ska vara giltigt, får detta ej förekomma. Att \citet{CST} visar liknande avvikelse vid höga vindhastigheter tyder på att en ofullständig modell även använts där. \citet{CST} har likt denna studien inte tagit hänsyn till böjbara rotorblad. Därför är detta att anse som den mest rimliga förklaringen till avvikelsen.
+
+
+        \item Det har i litteraturstudien framkommit att \textsc{Xfoil} ger dåligt överensstämmande lyft- och motståndskoefficienter efter stallvinkeln $a_{stall}$ samt att \textsc{Xfoil} underskattar motståndskoefficienten $C_d$.  Vid höga vindhastigheter fås även höga angreppsvinklar (se Appendix B). Dessa höga angreppsvinklar har även extrapolerats fram vilket gör att mycket hänger på denna extrapolations korrekthet. Litteraturstudien visade även att \textsc{Bem}s största svaghet är dess lyft- och motståndskoefficienter. Detta låter som en rimlig förklaringsmodell men när dessa felaktigheter försökte kompenseras sågs dessvärre ingen förbättring.
+        
+
+        \item Det är även tänkbart att ett implementeringsfel av numeriken är problemet då koden nära följer den föreslagna implementationen i \citet{hansen}. \citet{hansen} behandlar endast ekvationerna och ger ingen ledning i hur olika numeriska misstag ska undvikas. Exempelvis har flera gånger lösningar behövts göras för att undvika att dela med noll under lösningen av \textsc{Bem}ekvationerna. 
+        \end{enumerate}
+    
+    \item Trots modellens avvikelse efter c:a 8 m/s har god överensstämmelse visats vid lägre vindhastigheter. När optimeringen gjordes valdes godtyckligt vindförutsättningarna för St. Lawrence i Kanada. 81 \% av vinden visar sig här vara förlagd innan 10 m/s vilket bör betyda att optimeringen ändå till stor del gjorts med en godtagbar modell. Det går dock inte att utesluta att resultatet påverkats av avvikelsen.
+    
+    \item Vingprofilen som av optimeringen gav som resultat (\fref{AFjamforelse}) har i bakkant ett tunt parti. Denna tunna ``svans'' kan tänkas vara för skör för att vara realiserbar på ett riktigt rotorblad. Detta är antagligen direkt relaterat till att inga hållfasthetsaspekter tagits med i optimeringen.
+    
+    \item Det optimerade rotorbladet visas i \fref{powercurvecompare} tillsammans med utgångspunkten UAE III. Här framgår hur avvikelsen efter 8 m/s beter sig. Det är att förvänta att det optimerade rotorbladet om realiserat i verkligheten borde ha en liknande avvikelse och att detta skulle innebära att det ökade effekttutaget är mindre än de 15 \% som presenterades i resultaten.
+      
+      
+    \item Referensfallet UAE III som även används som utgångspunkt i optimeringen gör inga anspråk på att vara ett optimerad vindkraftverk. Detta är ett akademiskt testfall vilket valdes eftersom empirisk data fanns tillgänglig. Därför är sannolikt 15 \% genomsnittlig effektökning mer än vad som kan förväntas ifall optimeringen hade gjorts på ett kommersiellt vindkraftverk.
+
+    \item Referensfallet UAE III har endast en vingprofil över hela rotorbladet och det har även resultatet från optimeringen. Flera vingprofiler längs rotorbladet hade sannolikt gett ytterligare effektökningar och var egentligen önskvärt, men eftersom optimeringen ungefär växer med $\mathcal{O}\left(n\right)$ där $n$ är antalet designvariabler - hade optimeringen då tagit ungefär tre gånger så lång tid vilket det tidsmässigt inte fanns utrymme för.
+    
+
+
+\end{enumerate}
+
+
+
+\pagebreak
+\section{Rekommendationer för framtida arbete}
+
+Följande rekommendationer för framtida arbete ges här med viktigast först och sedan i fallande ordning.
+
+\begin{enumerate}
+    \item Det framtagna optimerade rotorbladets egenskaper skulle kunna verifieras om även en analys gjordes med \textsc{cfd}.
+
+    \item En modell som även tar hänsyn till rotorbladens deformation vid högre vindhastigheter (vanligen kallat fluid structure interactions) skulle öka modellens tillförlitlighet avsevärt.
+    
+    \item Ytterligare testfall utöver de två i rapporten skulle behövas för att verifiera metoden. 
+  
+    \item Det skulle även vara extra intressant att undersöka metodens möjligheter att göra förbättringar på kommersiella vindkraftverk. Ett kommersiellt vindkraftverk är att anta redan optimerat. Därför skulle det vara intressant att se hur mycket en platsspecifik optimering skulle kunna öka energiuttaget.
+        
+ 
+    \item Optimeringen skulle med fördel utökas till en flermålsoptimering där även hållfasthet togs med. Detta för att vingprofiler och rotorblad med ej realiserbar geometri ska kunna undvikas.
+    
+    \item Optimeringen gjordes med antagandet att lyft- och motståndskoefficienter kunde antas alltid vara gällande vid $Re \times 10^5 = 20$. Med mer tid skulle SiteOpt kunna utvärdera vid flera Reynolds tal för att undvika detta antagandet men till bekostnad på beräkningstid.
+    
+    \item Med mer tid skulle även SiteOpt kunna tillåtas optimera fram olika vingprofiler i rotorbladets topp-, mellan- och rotvingprofil.
+    
+    \item Designvariablerna skulle kunna utökas på flera sätt utan att beräkningskostnaden ökade märkbart:
+    \begin{enumerate}
+        \item Löptalet $\lambda$ skulle kunna optimeras. Ett vindkraftverk som i detta fallet fungerar med fixerat RPM producerar sällan optimal effekt.
+        \item Fler diskreta punkter som definierar \emph{twist}- och kordadistributionen skulle kunna läggas till. Nu används endast tre diskreta punkter vilket är begränsande för rotorblad som eventuellt skulle vara bättre med en mer avancerad geometri.
+    \end{enumerate}
+    
+    %\item SiteOpt skulle genom att optimera på ett kommersiellt vindkraft
+    
+    \item Metoden beskriven i studien är ett bra exempel på ett problem som skulle kunna lösas snabbare om koden parallelliseras. Då skulle istället flera processorkärnor (eller till och med datorer) kunna användas samtidigt och optimeringen skulle gå väldigt mycket snabbare. 
+    
+    \item Under uppsatsens slutskede hittades rapporten \emph{A Simple Solution Method for the Blade Element Momentum Equations with Guaranteed Convergence} \citep{Andrew} vilken föreslår ett nytt sätt lösa \textsc{Bem} där garanterad konvergens uppnås. Detta förfarande skulle vara en bättre implementering av \textsc{Bem} än den som använts i denna studie.
+
+    \item $\alpha_{stall}$ uppstår vid olika platser beroende på om angreppsvinkeln ökas eller minskas. Detta fenomen kallat dynamisk stall skulle kunna tas hänsyn med en mer avancerad modell.
+
+\end{enumerate}
+
+
+
+
+
+
+
